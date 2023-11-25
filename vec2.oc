@@ -1,0 +1,71 @@
+import std::math
+
+//* A type representing a 2D vector
+struct Vec2 {
+    x: f32
+    y: f32
+}
+
+def Vec2::print(this, name:str = null) {
+    if name? {
+        print("%s: ", name)
+    }
+    println("(%f %f)", .x, .y)
+}
+
+def Vec2::add(this, other: Vec2): Vec2 => Vec2(.x + other.x, .y + other.y)
+def Vec2::addf(this, val: f32): Vec2 => Vec2(.x + val, .y + val)
+
+def Vec2::sub(this, other: Vec2): Vec2 => Vec2(.x - other.x, .y - other.y)
+def Vec2::subf(this, val: f32): Vec2 => Vec2(.x - val, .y - val)
+
+def Vec2::mult(this, other: Vec2): Vec2 => Vec2(.x * other.x, .y * other.y)
+def Vec2::multf(this, val: f32): Vec2 => Vec2(.x * val, .y * val)
+
+def Vec2::div(this, other: Vec2): Vec2 => Vec2(.x / other.x, .y / other.y)
+def Vec2::divf(this, val: f32): Vec2 => Vec2(.x / val, .y / val)
+def Vec2::inv(this): Vec2 => Vec2(1.0 / .x, 1.0 / .y)
+
+def Vec2::dot(this, other: Vec2): f32 => .x * other.x + .y * other.y
+
+
+def Vec2::cross(this, other: Vec2): Vec2 {
+    return Vec2(
+        .y * other.x - .x * other.y,
+        .x * other.y - .y * other.x
+    )
+}
+
+def Vec2::length(this): f32 => (.x * .x + .y * .y).sqrt()
+def Vec2::length_sq(this): f32 => .x * .x + .y * .y
+def Vec2::normalized(this): Vec2 => .divf(.length())
+
+def Vec2::reflect(this, normal: Vec2): Vec2 {
+    return .sub(normal.multf(2.0 * .dot(normal)));
+}
+
+def Vec2::refract(this, normal: Vec2, rfidx: f32, out: &Vec2): bool {
+    let r = 1.0 / rfidx
+    let nn = normal
+
+    if this.dot(normal) > 0.0 {
+        r = rfidx
+        nn = normal.multf(-1.0)        
+    }
+
+    let c = -this.dot(nn)
+    let discr = 1.0 - r * r * (1.0 - c * c)
+
+    if discr < 0.0 return false
+
+    *out = this.multf(r).add(nn.multf(r * c - discr.sqrt()))
+    return true
+}
+
+def Vec2::rotate(&this, angle: f32): Vec2 {
+    let s = angle.sin();
+    let c = angle.cos();
+    let x = .x * c - .y * s;
+    let y = .x * s + .y * c;
+    return Vec2(x, y);
+}

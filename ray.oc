@@ -1,0 +1,46 @@
+import @vec2::Vec2
+import @objects::Object
+import @image::FColor
+import @util::hue_to_rgb
+
+import std::random::{this, RandomState}
+
+struct Ray {
+    o: Vec2
+    d: Vec2
+    rng: random::RandomState
+    speed: f32
+    time: f32
+    inside: bool
+    hue: f32
+    color: FColor
+}
+
+def Ray::make(o: Vec2, d: Vec2, rng: random::RandomState): Ray {
+    let ray: Ray
+    ray.o = o
+    ray.d = d
+    ray.rng = rng
+    ray.speed = 1.0
+    ray.time = 0.0
+    ray.inside = false
+    ray.hue = random::randf32(&ray.rng)
+    ray.color = hue_to_rgb(ray.hue)
+    return ray
+}
+
+def Ray::at(&this, t: f32): Vec2 => .o.add(.d.multf(t))
+
+struct HitRec {
+    t: f32
+    n: Vec2
+    obj: &Object
+}
+
+def HitRec::default(): HitRec {
+    let rec: HitRec
+    rec.t = 1000000.0
+    rec.n = Vec2(0.0, 0.0)
+    rec.obj = null
+    return rec
+}

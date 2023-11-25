@@ -1,0 +1,162 @@
+import @ray::{ Ray, HitRec }
+import @vec2::{ Vec2 }
+
+
+enum Material {
+    Diffuse
+    Reflective
+    Refractive
+}
+
+// ----- Object -----
+
+enum ObjectType {
+    Circle
+    Line
+    Rect
+}
+
+struct Object {
+    type: ObjectType
+    data: untyped_ptr
+    mat: Material
+    ior: f32
+}
+
+def Object::new(type: ObjectType, data: untyped_ptr, mat: Material, ior: f32 = 1.0): &Object {
+    let obj = std::new<Object>()
+    obj.type = type
+    obj.data = data
+    obj.mat = mat
+    obj.ior = ior
+    return obj
+}
+
+def Object::hit(&this, ray: &Ray, rec: &HitRec): bool {
+    let hit = match .type {
+        Circle => Circle::hit(.data, ray, rec)
+        Line => Line::hit(.data, ray, rec)
+        Rect => Rect::hit(.data, ray, rec)
+    }
+    if hit {
+        rec.obj = this
+    }
+    return hit
+}
+
+// ----- Circle -----
+
+struct Circle {
+    center: Vec2
+    radius: f32
+}
+
+def Circle::new(center: Vec2, radius: f32, mat: Material, ior: f32 = 1.0): &Object {
+    let circ = std::new<Circle>()
+    circ.center = center
+    circ.radius = radius
+    return Object::new(Circle, circ, mat, ior)
+}
+
+def Circle::hit(&this, ray: &Ray, rec: &HitRec): bool {
+    let oc = ray.o.sub(.center)
+    let a = ray.d.dot(ray.d)
+    let b = oc.dot(ray.d)
+    let c = oc.dot(oc) - .radius * .radius
+
+    let discriminant = b * b - a * c
+    if discriminant > 0.0 {
+        let t1 = (-b - discriminant.sqrt()) / a
+        let t2 = (-b + discriminant.sqrt()) / a
+
+        let t = t1
+        if t < 0.0001 then t = t2
+
+        if t > 0.0001 and t < rec.t {
+            rec.t = t
+            let p = ray.at(t)
+            let n = p.sub(.center)
+            rec.n = n.normalized()
+            return true
+        }
+    }
+
+    return false
+}
+
+// ----- Line -----
+
+struct Line {
+    start: Vec2
+    end: Vec2
+}
+
+def Line::new(start: Vec2, end: Vec2, mat: Material, ior: f32 = 1.0): &Object {
+    let line = std::new<Line>()
+    line.start = start
+    line.end = end
+    return Object::new(Line, line, mat, ior)
+}
+
+def Line::hit(&this, ray: &Ray, rec: &HitRec): bool {
+    let a1 = .start
+    let b1 = .end
+    let a2 = ray.o
+    let b2 = ray.d
+
+    let s1_x = b1.x - a1.x
+    let s1_y = b1.y - a1.y
+    let s2_x = b2.x
+    let s2_y = b2.y
+
+    let s = (-s1_y * (a1.x - a2.x) + s1_x * (a1.y - a2.y)) / (-s2_x * s1_y + s1_x * s2_y)
+    let t = (s2_x * (a1.y - a2.y) - s2_y * (a1.x - a2.x)) / (-s2_x * s1_y + s1_x * s2_y)
+
+
+    if 0.0 <= t <= 1.0 and s > 0.0001 and s < rec.t {
+        rec.t = s
+        let n = Vec2(s1_y, -s1_x)
+        let ndotd = n.dot(ray.d)
+        if ndotd < 0.0 {
+            rec.n = n
+        } else {
+            rec.n = n.multf(-1.0)
+        }
+        rec.n = rec.n.normalized()
+        return true
+    }
+
+    return false
+}
+
+// ----- Rect -----
+
+struct Rect {
+    min: Vec2
+    max: Vec2
+}
+
+def Rect::new(min: Vec2, max: Vec2, mat: Material, ior: f32 = 1.0): &Object {
+    let rect = std::new<Rect>()
+    rect.min = min
+    rect.max = max
+    return Object::new(Rect, rect, mat, ior)
+}
+
+def Rect::hit(&this, ray: &Ray, rec: &HitRec): bool {
+    let lines: [Line; 4]
+    lines[0] = Line(.min, Vec2(.max.x, .min.y))
+    lines[1] = Line(Vec2(.max.x, .min.y), .max)
+    lines[2] = Line(.max, Vec2(.min.x, .max.y))
+    lines[3] = Line(Vec2(.min.x, .max.y), .min)
+
+    let hit = false
+    for let l = 0; l < 4; l++ {
+        let line = &lines[l]
+        if line.hit(ray, rec) {
+            hit = true
+        }
+    }
+
+    return hit
+}

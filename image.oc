@@ -1,0 +1,87 @@
+import std::image::{ Image, Color, bilinear_interp }
+import std::libc::{ calloc, free }
+import @util::clamp
+
+struct FColor {
+    r: f32
+    g: f32
+    b: f32
+}
+
+struct FImage {
+    width: u32
+    height: u32
+    data: &FColor
+}
+
+def FImage::new(width: u32, height: u32): &FImage {
+    let img = calloc(1, sizeof(FImage)) as &FImage
+    *img = FImage(width, height, calloc(width * height, sizeof(FColor)))
+    return img
+}
+
+def FImage::free(&this) {
+    free(.data)
+    free(this)
+}
+
+def FImage::get(&this, x: u32, y: u32): FColor => .data[y * .width + x]
+def FImage::set(&this, x: u32, y: u32, col: FColor) { .data[y * .width + x] = col }
+
+def FImage::to_image(&this): &Image {
+    let img = Image::new(.width, .height)
+    for let y = 0; y < .height; y++ {
+        for let x = 0; x < .width; x++ {
+            let fcol = .get(x, y)
+            let col = Color(
+                (clamp(fcol.r, 0.0, 1.0) * 255.0) as u8,
+                (clamp(fcol.g, 0.0, 1.0) * 255.0) as u8,
+                (clamp(fcol.b, 0.0, 1.0) * 255.0) as u8,
+            )
+            img.set(x, y, col)
+        }
+    }
+    return img
+}
+
+def FImage::save(&this, filename: str) {
+    let img = .to_image()
+    img.save(filename)
+    img.free()
+}
+
+def FImage::get_interpolated(&this, xf: f32, yf: f32): FColor {
+    assert 0.0 <= xf < (.width as f32), `X coordinate out of bounds: {xf}`
+    assert 0.0 <= yf < (.height as f32), `Y coordinate out of bounds: {yf}`
+
+    let x_fl = xf as u32
+    let y_fl = yf as u32
+
+    let x_cl = if xf != (x_fl as f32) then x_fl + 1 else x_fl
+    let y_cl = if yf != (y_fl as f32) then y_fl + 1 else y_fl
+
+    let a = .get(x_fl, y_fl)
+    let b = .get(x_cl, y_fl)
+    let c = .get(x_fl, y_cl)
+    let d = .get(x_cl, y_cl)
+
+    let x_ratio = xf - (x_fl as f32)
+    let y_ratio = yf - (y_fl as f32)
+
+    let col = FColor(
+        bilinear_interp(x_ratio, y_ratio, a.r, b.r, c.r, d.r),
+        bilinear_interp(x_ratio, y_ratio, a.g, b.g, c.g, d.g),
+        bilinear_interp(x_ratio, y_ratio, a.b, b.b, c.b, d.b),
+    )
+    return col
+}
+
+def FImage::clear(&this) {
+    std::libc::memset(.data, 0, .width * .height * sizeof(FColor))
+}
+
+def FImage::copy(&this): &FImage {
+    let copy = FImage::new(.width, .height)
+    std::libc::memcpy(copy.data, .data, .width * .height * sizeof(FColor))
+    return copy
+}

@@ -1,0 +1,26 @@
+import @vec2::{ Vec2 }
+import @image::{ FColor }
+import std::random::{this, RandomState}
+import @ray::{ Ray }
+
+enum LightType {
+    Point
+    Laser
+}
+
+struct Light {
+    color: FColor
+    type: LightType
+    o: Vec2
+    d: Vec2
+
+}
+
+def Light::get_ray(&this, rng: RandomState): Ray => match .type {
+    Laser => Ray::make(this.o, this.d, rng)
+    Point => {
+        let angle = random::randf32(&rng) * std::math::TAU
+        let d = Vec2(angle.cos(), angle.sin())
+        yield Ray::make(this.o, d, rng)
+    }
+}

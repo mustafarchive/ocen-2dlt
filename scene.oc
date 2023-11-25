@@ -1,0 +1,218 @@
+import @objects::{ Object, Line, Circle, Rect, Material }
+import @image::{ FImage, FColor }
+import @vec2::{ Vec2 }
+import @ray::{ Ray, HitRec }
+import @light::{ Light }
+
+import std::vector::{ Vector }
+
+struct Scene {
+    height: u32
+    width: u32
+
+    x_scale: f32
+    y_scale: f32
+
+    max_time: f32
+
+    objects: &Vector<&Object>
+    light: Light
+
+    img: &FImage
+}
+
+def Scene::free(&this) {
+    this.img.free()
+    for obj : .objects.iter() {
+        std::libc::free(obj.data)
+        std::libc::free(obj)
+    }
+    .objects.free()
+}
+
+def Scene::draw_debug(&this) {
+    for obj : .objects.iter() {
+        .draw_debug_obj(obj)
+    }
+}
+
+def Scene::draw_debug_obj(&this, obj: &Object) {
+    match obj.type {
+        Line => {
+            let ln = obj.data as &Line
+            .draw_line(&ln.start, &ln.end, FColor(0.0, 1.0, 0.0), debug: true)
+        }
+        Circle => {
+            let c = obj.data as &Circle
+            .draw_circle(&c.center, c.radius, FColor(0.0, 1.0, 0.0))
+        }
+        Rect => {
+            let r = obj.data as &Rect
+
+            let offset = 0.001
+
+            let lines: [Line; 4]
+            lines[0] = Line(r.min, Vec2(r.max.x, r.min.y).subf(offset))
+            lines[1] = Line(Vec2(r.max.x, r.min.y), r.max.subf(offset))
+            lines[2] = Line(r.max, Vec2(r.min.x, r.max.y).subf(offset))
+            lines[3] = Line(Vec2(r.min.x, r.max.y), r.min.subf(offset))
+
+            for let i = 0; i < 4; ++i {
+                .draw_line(&lines[i].start, &lines[i].end, FColor(0.0, 1.0, 0.0), debug: true)
+            }
+        }
+        // else => assert false, "Unknown object type"
+    }
+}
+
+def Scene::new(width: u32, height: u32, max_time: f32 = -1.0): &Scene {
+    let img = FImage::new(width, height)
+    let objects = Vector<&Object>::new()
+
+    let x_scale = 2.0
+    let y_scale = 2.0
+
+    if width > height {
+        x_scale *= (width as f32) / (height as f32)
+    } else {
+        y_scale *= (height as f32) / (width as f32)
+    }
+
+    let scene = std::new<Scene>()
+    scene.width = width
+    scene.height = height
+    scene.x_scale = x_scale
+    scene.y_scale = y_scale
+    scene.objects = objects
+    scene.img = img
+    scene.max_time = max_time
+
+    scene.objects.push(Rect::new(Vec2(-x_scale, -y_scale), Vec2(x_scale, y_scale), Diffuse))
+    return scene
+}
+
+def Scene::hit(&this, ray: &Ray, rec: &HitRec): bool {
+    let hit = false
+    for obj : .objects.iter() {
+        if obj.hit(ray, rec) {
+            hit = true
+        }
+    }
+    return hit
+}
+
+def Scene::draw_circle(&this, p1: &Vec2, r: f32, color: FColor) {
+    let steps = 1000
+    for let angle = 0; angle < steps; angle += 1 {
+        let a = (angle as f32 / steps as f32) * 2.0 * 3.1415
+        let x1 = p1.x + r * a.cos()
+        let y1 = p1.y + r * a.sin()
+
+        let x2 = (x1 + .x_scale) * (this.width as f32) / (2.0 * this.x_scale)
+        let y2 = (y1 + .y_scale) * (this.height as f32) / (2.0 * this.y_scale)
+
+        let xi = x2.round()
+        let yi = y2.round()
+
+        if xi >= 0 and yi >= 0 {
+            let xu = x2 as u32
+            let yu = y2 as u32
+            if 0 <= xu < .width and 0 <= yu < .height {
+                this.img.set(xu, yu, color)
+            }
+        }
+    }
+}
+
+def Scene::set_pixel(&this, x: f32, y: f32, color: FColor) {
+    let xx = x.round()
+    let yy = y.round()
+
+    for let i = xx - 1; i <= xx + 1; i++ {
+        for let j = yy - 1; j <= yy + 1; j++ {
+            let W = (-(((x - i as f32) * (x - i as f32)) + ((y - j as f32) * (y - j as f32))) * 0.5).exp()
+
+            if 0i32 <= i < .width as i32 and 0i32 <= j < .height as i32 {
+                let oc = .img.get(i as u32, j as u32)
+                let nc = FColor(
+                    oc.r + color.r * W,
+                    oc.g + color.g * W,
+                    oc.b + color.b * W
+                )
+                .img.set(i as u32, j as u32, nc)
+            }
+        }
+    }
+}
+
+def Scene::draw_line(&this, p1: &Vec2, p2: &Vec2, color: FColor, debug: bool = false) {
+    let x1 = (p1.x + .x_scale) * (this.width as f32) / (2.0 * this.x_scale) 
+    let y1 = (p1.y + .y_scale) * (this.height as f32) / (2.0 * this.y_scale)
+    let x2 = (p2.x + .x_scale) * (this.width as f32) / (2.0 * this.x_scale)
+    let y2 = (p2.y + .y_scale) * (this.height as f32) / (2.0 * this.y_scale)
+
+
+    // line algorithm
+    let dx = x2 - x1
+    let dy = y2 - y1
+
+    let xt: f32
+    let yt: f32
+
+    if dx.abs() >= dy.abs() {
+        if x2 < x1 {
+            xt = x1; x1 = x2; x2 = xt
+            yt = y1; y1 = y2; y2 = yt
+        }
+
+        let y = y1
+        let inc = (y2 - y1) / (x2 - x1)
+
+        for let x = x1; x <= x2; x += 1.0 {
+            if debug {
+                let xi = x.round()
+                let yi = y.round()
+
+                if xi >= 0 and yi >= 0 {
+                    let xu = x as u32
+                    let yu = y as u32
+                    if 0 <= xu < .width and 0 <= yu < .height {
+                        .img.set(xu, yu, color)
+                    }
+                }
+            } else {
+                .set_pixel(x, y, color)
+            }
+
+            y += inc
+        }
+
+    } else {
+        if y2 < y1 {
+            xt = x1; x1 = x2; x2 = xt
+            yt = y1; y1 = y2; y2 = yt
+        }
+
+        let x = x1
+        let inc = (x2 - x1) / (y2 - y1)
+
+        for let y = y1; y <= y2; y += 1.0 {
+            if debug {
+                let xi = x.round()
+                let yi = y.round()
+
+                if xi >= 0 and yi >= 0 {
+                    let xu = x as u32
+                    let yu = y as u32
+                    if 0 <= xu < .width and 0 <= yu < .height {
+                        .img.set(xu, yu, color)
+                    }
+                }
+            } else {
+                .set_pixel(x, y, color)
+            }
+
+            x += inc
+        }
+    }
+}

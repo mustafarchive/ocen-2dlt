@@ -1,0 +1,216 @@
+import @util
+import @image::{ FImage, FColor }
+import @vec2::{ Vec2 }
+import @scene::{ Scene }
+
+import @ray::{ Ray, HitRec }
+import @light::{ Light, LightType }
+
+import @objects::{ Object, Material, Circle, Line, Rect }
+
+import std::vector::Vector
+import std::video_renderer::VideoRenderer
+
+import std::random::{ this, RandomState }
+
+const SHOW_INTERSECTION_NORMALS: bool = false
+
+def drand48(): f32 extern
+
+let OMP_PARALLEL_FOR_DYNAMIC_SCHEDULE: i32 extern("#pragma omp parallel for schedule(dynamic, 120)")
+@compiler c_flag "-Xpreprocessor -fopenmp -lomp -Wno-extra-tokens -O3 -ffast-math -march=native"
+
+def trace(scene: &Scene, ray: &Ray, max_depth: u32, depth: u32 = 0) {
+    if depth >= max_depth then return
+    
+    let rec = HitRec::default()
+    if not scene.hit(ray, &rec) return
+
+
+    let p = ray.at(rec.t)
+    let n = rec.n
+
+    if scene.max_time > 0.0 {
+        let left = scene.max_time - ray.time
+        let cur = rec.t / ray.speed
+        if cur < left {
+            ray.time += cur
+        } else {
+            let new_t = left * ray.speed
+            ray.time = scene.max_time
+            p = ray.at(new_t)
+        }
+    }
+
+    scene.draw_line(&ray.o, &p, ray.color)
+
+    if SHOW_INTERSECTION_NORMALS {
+        let pn = p.add(n.multf(0.5))
+        scene.draw_line(&p, &pn, FColor(0.0, 1.0, 0.0), debug: true)
+        scene.draw_circle(&p, 0.01, FColor(0.0, 1.0, 0.0))
+    }
+
+    if scene.max_time > 0.0 and ray.time >= scene.max_time {
+        return
+    }
+
+    ray.o = p
+    ray.d = match rec.obj.mat {
+        Diffuse => {
+            let angle = (random::randf32(&ray.rng) - 0.5) * 3.1415
+            let dir = rec.n.rotate(angle)
+            yield dir
+        }
+        Reflective => {
+            let dir = ray.d.reflect(rec.n)
+            yield dir
+        }
+        Refractive => {
+            let refr_index = rec.obj.ior + ray.hue * 0.3
+            let n1 = 1.0
+            let n2 = refr_index
+
+            let dr = ray.d.dot(rec.n)
+            if dr > 0.0 {
+                n1 = refr_index
+                n2 = 1.0
+            }
+
+            dr = dr.abs()
+            
+            // Schlick's approximation
+            let R0 = ((n1 - n2) / (n1 + n2)).pow(2.0)
+            let Rs = R0 + (1.0 - R0) * (1.0 - dr).pow(5.0)
+
+            let refl_dir: Vec2
+            if ray.d.refract(rec.n, refr_index, &refl_dir) and random::randf32(&ray.rng) > Rs {
+                ray.speed *= n1 / n2
+                ray.inside = not ray.inside
+            } else {
+                refl_dir = ray.d.reflect(rec.n)
+            }
+            yield refl_dir
+        }
+    }
+    // println(`New dir: {new_dir.x}, {new_dir.y}`)
+    trace(scene, ray, max_depth, depth + 1)
+}
+
+def adjust_img(img: &FImage) {
+    let fps = img.data as &f32
+    let N = img.height * img.width * 3
+    for let i = 0; i < N; ++i {
+        fps[i] = (fps[i] + 1.5).log()
+    }
+
+    let ma = -1000000.0
+    let mi = 1000000.0
+    for let i = 0; i < N; ++i {
+        if fps[i] > ma { ma = fps[i] }
+        if fps[i] < mi { mi = fps[i] }
+    }
+
+    for let i = 0; i < N; ++i {
+        fps[i] = (fps[i] - mi) / (ma - mi)
+    }
+}
+
+def build_scene_0(scene: &Scene) {
+    scene.objects.push(Circle::new(Vec2(1.5, -1.5), 0.45, Diffuse, 1.6))
+    scene.objects.push(Circle::new(Vec2(0.5, -0.5), 0.25, Refractive, 2.47))
+ 
+    scene.light = Light(FColor(1.0, 1.0, 1.0), Laser, Vec2(0.0, 0.0), Vec2(1.0, -0.8))
+}
+
+def build_scene_1(scene: &Scene) {
+    scene.objects.push(Circle::new(Vec2(-2.3, -1.05), 0.7, Refractive, 1.7))
+    scene.objects.push(Circle::new(Vec2(-0.5, -1.0), 0.6, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2(0.65, -1.6), 0.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2(1.9, -1.65), 0.25, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2(2.8, -1.5), 0.4, Refractive, 1.4))
+
+    scene.objects.push(Circle::new(Vec2(1.1, 0.6), 1.3, Refractive, 1.4))
+
+    scene.objects.push(Circle::new(Vec2(-1.5, 0.5), 0.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2(-1.0, 1.1), 0.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2(-1.65, 1.2), 0.3, Refractive, 1.4))
+
+    scene.objects.push(Circle::new(Vec2(2.3, -0.5), 0.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2(2.92, -0.35), 0.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2(2.75, 0.3), 0.3, Refractive, 1.4))
+
+    scene.light = Light(
+        FColor(1.0, 1.0, 1.0), 
+        Point, 
+        Vec2(-3.15, -1.9),
+        Vec2(1.0, 1.115).normalized()
+    )
+//  p.px=-3.15;			// Set a light source at the origin, pointing in direction
+//  p.py=-1.9;			// (1.0, -.8)  (remember that Y increases downward!)
+//  d.px=1.0;			// This ray should hit both spheres, so you can test your
+//  d.py=1.115;			// intersection code. The closest sphere is reflecting, so
+//  normalize(&d);			// you can test your code for mirror-reflecting rays
+//  l.p=p;
+//  l.d=d;
+//  lightsource.l=l;
+//  lightsource.light_type=0;	// Change this to set the light source type to point or laser
+//  lightsource.R=1;		// Lightsource colour in RGB space. All values must be in [0,1]
+//  lightsource.G=1;		// and (1,1,1) is white
+//  lightsource.B=1;
+}
+
+def do_render(width: u32, height: u32, max_time: f32 = -1.0, progress: bool = true): &Scene {
+    let num_rays = 1000000
+    let max_depth = if max_time > 0.0 then 100 else 6
+
+    let scene = Scene::new(width, height, max_time)
+    // build_scene_0(scene)
+    build_scene_1(scene)
+
+    let pct = if num_rays > 20 then num_rays / 20 else 1
+
+    let done = 0
+
+    OMP_PARALLEL_FOR_DYNAMIC_SCHEDULE
+    for let i = 0; i < num_rays; ++i {
+        let rng: RandomState
+        rng.seed(i * 0xcafebabe * 24562983 + 53)
+        for let j = 0; j < 15; ++j {
+            random::randf32(&rng)   // throw away some random numbers
+        }
+
+        let ray = scene.light.get_ray(rng)
+        trace(scene, &ray, max_depth)
+    
+        done += 1
+        if progress and done % pct == 0 {
+            println(`{done * 100 / num_rays }% Done`)
+        }
+    }
+
+    adjust_img(scene.img)
+    // scene.draw_debug()
+    return scene
+}
+
+def main() {
+    let image_width = 800 * 2
+    let image_height = 500 * 2
+
+    let vr = VideoRenderer::create(FFMPEG, width: image_width, height: image_height, fps: 60)
+    let done = 0
+    for let t = 0.0; t < 100.0; t += 0.1 {
+        let s = do_render(image_width, image_height, t, progress: false)
+        let img = s.img.to_image()
+        vr.send_frame(img)
+        img.free()
+        s.free()
+
+        if vr.type == FFMPEG {
+            println(`[+++] Done {done} frames`)
+            done += 1
+        }
+    }
+    // let s = do_render(image_width, image_height)
+    // s.img.save("foo.qoi")
+}

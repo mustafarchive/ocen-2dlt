@@ -1,0 +1,29 @@
+import @image::{ FColor }
+
+def f32::round(this): i32 extern("roundf")
+def f32::pow(this, v: f32): f32 extern("powf")
+def f32::exp(this): f32 extern("expf")
+def f32::mod(this, v: f32): f32 extern("fmod")
+
+def clamp(x: f32, min: f32, max: f32): f32 {
+    if x < min { return min }
+    if x > max { return max }
+    return x
+}
+
+def hue_to_rgb(hue: f32): FColor {
+    let H = hue
+    let C = 1.0;
+    let X = C * (1.0 - (((6.0 * H).mod(2.0) - 1.0) as f32).abs());
+    let Z = 0.0
+
+    return match (H * 6.0) as u32 {
+        0 => FColor(C, X, Z),
+        1 => FColor(X, C, Z),
+        2 => FColor(Z, C, X),
+        3 => FColor(Z, X, C),
+        4 => FColor(X, Z, C),
+        5 => FColor(C, Z, X),
+        else => FColor(Z, Z, Z)
+    }
+}
