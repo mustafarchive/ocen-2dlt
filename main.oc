@@ -1,6 +1,5 @@
 import @util
 import @image::{ FImage, FColor }
-import @vec2::{ Vec2 }
 import @scene::{ Scene }
 
 import @ray::{ Ray, HitRec }
@@ -9,56 +8,67 @@ import @light::{ Light, LightType }
 import @objects::{ Object, Material, Circle, Line, Rect }
 
 import std::vector::Vector
+import std::vec::{ Vec2f }
 import std::video_renderer::VideoRenderer
 
 import std::random::{ this, RandomState }
 
-const SHOW_INTERSECTION_NORMALS: bool = false
-
-def drand48(): f32 extern
 
 let OMP_PARALLEL_FOR_DYNAMIC_SCHEDULE: i32 extern("#pragma omp parallel for schedule(dynamic, 120)")
 @compiler c_flag "-Xpreprocessor -fopenmp -lomp -Wno-extra-tokens -O3 -ffast-math -march=native"
 
-def trace(scene: &Scene, ray: &Ray, max_depth: u32, depth: u32 = 0) {
-    if depth >= max_depth then return
-    
+
+struct Segment {
+    a: Vec2f
+    b: Vec2f
+    color: FColor
+    t: f32
+    speed: f32
+}
+
+struct Path {
+    segments: &Vector<Segment>
+}
+
+const MAX_DEPTH: u32 = 30
+
+def trace(scene: &Scene, path: &Path, ray: &Ray, depth: u32 = 0) {    
+    if depth >= MAX_DEPTH return
+
     let rec = HitRec::default()
     if not scene.hit(ray, &rec) return
-
 
     let p = ray.at(rec.t)
     let n = rec.n
 
-    if scene.max_time > 0.0 {
-        let left = scene.max_time - ray.time
-        let cur = rec.t / ray.speed
-        if cur < left {
-            ray.time += cur
-        } else {
-            let new_t = left * ray.speed
-            ray.time = scene.max_time
-            p = ray.at(new_t)
-        }
+    let left = scene.max_time - ray.time
+    let cur = rec.t / ray.speed
+    
+    if cur < left {
+        ray.time += cur
+    } else {
+        let new_t = left * ray.speed
+        ray.time = scene.max_time
+        p = ray.at(new_t)
     }
 
-    scene.draw_line(&ray.o, &p, ray.color)
+    let step_time = rec.t / ray.speed
+    let segment = Segment(ray.o, p, ray.color, rec.t, ray.speed)
+    path.segments.push(segment)
 
-    if SHOW_INTERSECTION_NORMALS {
-        let pn = p.add(n.multf(0.5))
-        scene.draw_line(&p, &pn, FColor(0.0, 1.0, 0.0), debug: true)
-        scene.draw_circle(&p, 0.01, FColor(0.0, 1.0, 0.0))
-    }
-
-    if scene.max_time > 0.0 and ray.time >= scene.max_time {
+    if ray.time >= scene.max_time {
         return
     }
 
+    let prev_o = ray.o
     ray.o = p
     ray.d = match rec.obj.mat {
         Diffuse => {
-            let angle = (random::randf32(&ray.rng) - 0.5) * 3.1415
+            let angle = (random::randf32() - 0.5) * 3.1415
             let dir = rec.n.rotate(angle)
+            if dir.dot(rec.n) > 0.0 {
+                dir = dir.mults(-1.0)
+            }
             yield dir
         }
         Reflective => {
@@ -66,7 +76,7 @@ def trace(scene: &Scene, ray: &Ray, max_depth: u32, depth: u32 = 0) {
             yield dir
         }
         Refractive => {
-            let refr_index = rec.obj.ior + ray.hue * 0.3
+            let refr_index = rec.obj.ior + (ray.hue - 0.5)*0.1
             let n1 = 1.0
             let n2 = refr_index
 
@@ -82,8 +92,8 @@ def trace(scene: &Scene, ray: &Ray, max_depth: u32, depth: u32 = 0) {
             let R0 = ((n1 - n2) / (n1 + n2)).pow(2.0)
             let Rs = R0 + (1.0 - R0) * (1.0 - dr).pow(5.0)
 
-            let refl_dir: Vec2
-            if ray.d.refract(rec.n, refr_index, &refl_dir) and random::randf32(&ray.rng) > Rs {
+            let refl_dir: Vec2f
+            if util::refract(ray.d, rec.n, refr_index, &refl_dir) {
                 ray.speed *= n1 / n2
                 ray.inside = not ray.inside
             } else {
@@ -92,125 +102,320 @@ def trace(scene: &Scene, ray: &Ray, max_depth: u32, depth: u32 = 0) {
             yield refl_dir
         }
     }
-    // println(`New dir: {new_dir.x}, {new_dir.y}`)
-    trace(scene, ray, max_depth, depth + 1)
+
+    // let nc = FColor(
+    //     rec.obj.color.r * ray.color.r,
+    //     rec.obj.color.g * ray.color.g,
+    //     rec.obj.color.b * ray.color.b
+    // )
+    let reduce_factor = 0.8
+    ray.color = FColor(
+        ray.color.r * reduce_factor,
+        ray.color.g * reduce_factor,
+        ray.color.b * reduce_factor
+    )
+    let mx = ray.color.r.max(ray.color.g).max(ray.color.b)
+    if mx < 0.05 {
+        return
+    }
+    trace(scene, path, ray, depth + 1)
 }
 
-def adjust_img(img: &FImage) {
+let g_adjust_img_min: f32 = -1.0
+let g_adjust_img_max: f32 = -1.0
+
+def adjust_img(img: &FImage, fixed_normalization: bool = false) {
     let fps = img.data as &f32
     let N = img.height * img.width * 3
     for let i = 0; i < N; ++i {
-        fps[i] = (fps[i] + 1.5).log()
+        fps[i] = (fps[i]+1.5).log()
     }
 
-    let ma = -1000000.0
-    let mi = 1000000.0
-    for let i = 0; i < N; ++i {
-        if fps[i] > ma { ma = fps[i] }
-        if fps[i] < mi { mi = fps[i] }
+    if g_adjust_img_max < 0.0 {
+        g_adjust_img_min = 1000000.0
+        g_adjust_img_max = -1000000.0
+        for let i = 0; i < N; ++i {
+            if fps[i] > g_adjust_img_max { g_adjust_img_max = fps[i] }
+            if fps[i] < g_adjust_img_min { g_adjust_img_min = fps[i] }
+        }
     }
 
     for let i = 0; i < N; ++i {
-        fps[i] = (fps[i] - mi) / (ma - mi)
+        fps[i] = (fps[i] - g_adjust_img_min) / (g_adjust_img_max - g_adjust_img_min)
+    }
+
+    if not fixed_normalization {
+        g_adjust_img_min = -1.0
+        g_adjust_img_max = -1.0
     }
 }
 
+
+def create_paths(scene: &Scene, samples: u32, progress: bool = true): &Vector<Path> {
+    let pct = if samples > 20 then samples / 20 else 1
+    let done = 0
+
+    let paths = Vector<Path>::new(samples)
+    paths.size = samples
+
+    for let i = 0; i < samples; ++i {
+        let ray = scene.light.get_ray()
+
+        let path = &paths.data[i]
+        path.segments = Vector<Segment>::new()
+        trace(scene, path, &ray)
+    
+        done += 1
+        if progress and done % pct == 0 {
+            println(`{done * 100 / samples }% Done`)
+        }
+    }
+
+    return paths
+}
+
+def draw_rays(scene: &Scene, paths: &Vector<Path>, max_time: f32, time_window: f32, progress: bool = true, fixed_normalization: bool = false) {
+    let min_time = 0.0
+    if time_window > 0.0 {
+        min_time = max_time - time_window
+    }
+
+    let done = 0
+    let pct = if paths.size > 20 then paths.size / 20 else 1
+
+    scene.clear_image()
+
+    for let i = 0; i < paths.size; i++ {
+        let segments = paths.data[i].segments
+        let time = 0.0
+        for let j = 0; j < segments.size; j++ {
+            let segment = &segments.data[j]
+            
+            let a = segment.a
+            let b = segment.b
+            let dir = b.sub(a)
+
+            let draw = true
+
+            let time_left = max_time - time
+            let step_time = segment.t / segment.speed
+
+            // Stop if we're going to hit the time limit
+            if step_time >= time_left {
+                let new_t = time_left * segment.speed
+                let ratio = new_t / segment.t
+                b = a.add(dir.mults(ratio))
+            }
+
+            let end_time = time + step_time
+            if time >= min_time {
+                draw = true
+            } else if end_time < min_time {
+                draw = false
+            } else {
+                let new_t = (min_time - time) * segment.speed
+                let ratio = new_t / segment.t
+                a = a.add(dir.mults(ratio))
+            }
+            time += step_time
+
+            if draw {
+                scene.draw_line(a, b, segment.color, Normal)
+            }
+            if time >= max_time {
+                break
+            }
+        }
+            
+        done += 1
+        if progress and done % pct == 0 {
+            println(`{done * 100 / paths.size }% Done`)
+        }
+    }
+
+    adjust_img(scene.img, fixed_normalization)
+    scene.draw_debug()
+}
+
+
 def build_scene_0(scene: &Scene) {
-    scene.objects.push(Circle::new(Vec2(1.5, -1.5), 0.45, Diffuse, 1.6))
-    scene.objects.push(Circle::new(Vec2(0.5, -0.5), 0.25, Refractive, 2.47))
- 
-    scene.light = Light(FColor(1.0, 1.0, 1.0), Laser, Vec2(0.0, 0.0), Vec2(1.0, -0.8))
+    scene.objects.push(Circle::new(Vec2f(1.5, -1.5), 0.45, Diffuse, 1.6))
+    scene.objects.push(Circle::new(Vec2f(0.5, -0.5), 0.25, Refractive, 2.47))
+
+    scene.light = Light(FColor(1.0, 1.0, 1.0), Laser, Vec2f(0.0, 0.0), Vec2f(1.0, -0.8))
 }
 
 def build_scene_1(scene: &Scene) {
-    scene.objects.push(Circle::new(Vec2(-2.3, -1.05), 0.7, Refractive, 1.7))
-    scene.objects.push(Circle::new(Vec2(-0.5, -1.0), 0.6, Refractive, 1.4))
-    scene.objects.push(Circle::new(Vec2(0.65, -1.6), 0.3, Refractive, 1.4))
-    scene.objects.push(Circle::new(Vec2(1.9, -1.65), 0.25, Refractive, 1.4))
-    scene.objects.push(Circle::new(Vec2(2.8, -1.5), 0.4, Refractive, 1.4))
+    let ior = 1.4
+    scene.objects.push(Circle::new(Vec2f(-2.3, -1.05), 0.7, Refractive, 1.7))
+    scene.objects.push(Circle::new(Vec2f(-0.5, -1.0), 0.6, Refractive, ior))
+    scene.objects.push(Circle::new(Vec2f(0.65, -1.6), 0.3, Refractive, ior))
+    scene.objects.push(Circle::new(Vec2f(1.9, -1.65), 0.25, Refractive, ior))
+    scene.objects.push(Circle::new(Vec2f(2.8, -1.5), 0.4, Refractive, ior))
 
-    scene.objects.push(Circle::new(Vec2(1.1, 0.6), 1.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2f(1.1, 0.6), 1.3, Refractive, ior))
 
-    scene.objects.push(Circle::new(Vec2(-1.5, 0.5), 0.3, Refractive, 1.4))
-    scene.objects.push(Circle::new(Vec2(-1.0, 1.1), 0.3, Refractive, 1.4))
-    scene.objects.push(Circle::new(Vec2(-1.65, 1.2), 0.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2f(-1.5, 0.5), 0.3, Refractive, ior))
+    scene.objects.push(Circle::new(Vec2f(-1.0, 1.1), 0.3, Refractive, ior))
+    scene.objects.push(Circle::new(Vec2f(-1.65, 1.2), 0.3, Refractive, ior))
 
-    scene.objects.push(Circle::new(Vec2(2.3, -0.5), 0.3, Refractive, 1.4))
-    scene.objects.push(Circle::new(Vec2(2.92, -0.35), 0.3, Refractive, 1.4))
-    scene.objects.push(Circle::new(Vec2(2.75, 0.3), 0.3, Refractive, 1.4))
+    scene.objects.push(Circle::new(Vec2f(2.3, -0.5), 0.3, Refractive, ior))
+    scene.objects.push(Circle::new(Vec2f(2.92, -0.35), 0.3, Refractive, ior))
+    scene.objects.push(Circle::new(Vec2f(2.75, 0.3), 0.3, Refractive, ior))
 
     scene.light = Light(
         FColor(1.0, 1.0, 1.0), 
         Point, 
-        Vec2(-3.15, -1.9),
-        Vec2(1.0, 1.115).normalized()
+        Vec2f(-3.15, -1.9),
+        Vec2f(1.0, 1.115).normalized()
     )
-//  p.px=-3.15;			// Set a light source at the origin, pointing in direction
-//  p.py=-1.9;			// (1.0, -.8)  (remember that Y increases downward!)
-//  d.px=1.0;			// This ray should hit both spheres, so you can test your
-//  d.py=1.115;			// intersection code. The closest sphere is reflecting, so
-//  normalize(&d);			// you can test your code for mirror-reflecting rays
-//  l.p=p;
-//  l.d=d;
-//  lightsource.l=l;
-//  lightsource.light_type=0;	// Change this to set the light source type to point or laser
-//  lightsource.R=1;		// Lightsource colour in RGB space. All values must be in [0,1]
-//  lightsource.G=1;		// and (1,1,1) is white
-//  lightsource.B=1;
 }
 
-def do_render(width: u32, height: u32, max_time: f32 = -1.0, progress: bool = true): &Scene {
-    let num_rays = 1000000
-    let max_depth = if max_time > 0.0 then 100 else 6
+def build_scene_2(scene: &Scene) {
+    for let i = 0; i < 5; i++ {
+        let a = (i as f32) / 5.0 * 3.1415 * 2.0
+        let p = Vec2f(a.cos(), a.sin()).mults(0.55).add(Vec2f(-0.07, 0.0))
+        scene.objects.push(Circle::new(p, 0.32, Refractive, 2.47))
+    }
+    for let i = 0; i < 7; i++ {
+        let a = (i as f32) / 7.0 * 3.1415 * 2.0
+        let p = Vec2f(a.cos(), a.sin()).mults(1.45).add(Vec2f(-0.07, 0.0))
+        scene.objects.push(Circle::new(p, 0.56, Refractive, 2.47))
+    }
+    scene.light = Light(
+        FColor(1.0, 1.0, 1.0), 
+        Point, 
+        Vec2f(-0.07, 0.0),
+        Vec2f(1.0, 1.0).normalized()
+    )
+}
 
-    let scene = Scene::new(width, height, max_time)
-    // build_scene_0(scene)
-    build_scene_1(scene)
+def build_scene_prism(scene: &Scene) {
+    // make sure the normal is pointing outwards, and the points are in clockwise order
+    // top of the triangle is at (0, -1)
+    scene.objects.push(Line::new(Vec2f(1.0, 1.0), Vec2f(-1.0, 1.0), Refractive, 1.6))
+    scene.objects.push(Line::new(Vec2f(-1.0, 1.0), Vec2f(0.0, -1.0), Refractive, 1.6))
+    scene.objects.push(Line::new(Vec2f(0.0, -1.0), Vec2f(1.0, 1.0), Refractive, 1.6))
 
-    let pct = if num_rays > 20 then num_rays / 20 else 1
 
-    let done = 0
+    // laser light coming from left
+    scene.light = Light(
+        FColor(1.0, 1.0, 1.0), 
+        Laser, 
+        Vec2f(-1.9, 0.5),
+        Vec2f(1.0, -0.3).normalized()
+    )
+}
 
-    OMP_PARALLEL_FOR_DYNAMIC_SCHEDULE
-    for let i = 0; i < num_rays; ++i {
-        let rng: RandomState
-        rng.seed(i * 0xcafebabe * 24562983 + 53)
-        for let j = 0; j < 15; ++j {
-            random::randf32(&rng)   // throw away some random numbers
-        }
+enum RunMode {
+    SDL
+    FFMPEG
+}
 
-        let ray = scene.light.get_ray(rng)
-        trace(scene, &ray, max_depth)
+def main(argc: i32, argv: &str) {
+    let image_width = 800 * 2
+    let image_height = 450 * 2
+
+    let mode = RunMode::SDL
+    let output_file = "out.mp4"
     
-        done += 1
-        if progress and done % pct == 0 {
-            println(`{done * 100 / num_rays }% Done`)
+    let max_time = 20.0
+    let time_window = -1.0
+    let incr = 0.05
+    let fps = 60
+    let samples = 10000
+    let max_depth = 10
+    let force = false
+
+    for let i = 1i32; i < argc; i++ {
+        match argv[i] {
+            "--sdl" => mode = RunMode::SDL
+            "--ffmpeg" => mode = RunMode::FFMPEG
+            "-r" | "--resolution" => {
+                let val = argv[++i]
+                // for eg, if "400", then W=H=400, if "400x300", then W=400, H=300
+                // use C-like strsep, all functions in `std::libc::`
+                let w = std::libc::strsep(&val, "x")
+                if w? {
+                    image_width = w.to_u32()
+                    image_height = image_width
+                }
+                let h = std::libc::strsep(&val, "x")
+                if h? {
+                    image_height = h.to_u32()
+                }
+            }
+            "-t" | "--time" => max_time = argv[++i].to_f32()
+            "-i" | "--increment" => incr = argv[++i].to_f32()
+            "-o" | "--output" => output_file = argv[++i]
+            "-w" | "--wavefront" => time_window = argv[++i].to_f32()
+            "-s" | "--samples" => samples = argv[++i].to_u32()
+            "-d" | "--depth" => max_depth = argv[++i].to_u32()
+            "--force" => force = true
+            "--fps" => fps = argv[++i].to_u32()
+            else => {
+                println(`Unknown argument {argv[i]}`)
+                std::exit(1)
+            }
         }
     }
 
-    adjust_img(scene.img)
-    // scene.draw_debug()
-    return scene
-}
+    let vr = match mode {
+        SDL => VideoRenderer::create(SDL, image_width, image_height, fps)
+        FFMPEG => VideoRenderer::create(FFMPEG, image_width, image_height, fps, output_file)
+    }
 
-def main() {
-    let image_width = 800 * 2
-    let image_height = 500 * 2
+    let est_mem_usage = (samples * sizeof(Path)) as f32
+    est_mem_usage += (MAX_DEPTH as f32) * (samples * sizeof(Segment)) as f32
+    let est_mem_usage_mb = est_mem_usage / 1024.0 / 1024.0
+    println(`Estimated memory usage for paths: {est_mem_usage_mb} MB`)
 
-    let vr = VideoRenderer::create(FFMPEG, width: image_width, height: image_height, fps: 60)
+    let mem_limit = 4096.0  // 4 GB
+    if est_mem_usage_mb > mem_limit and not force {
+        println(`Estimated memory usage exceeds {mem_limit} MB, use --force to override`)
+        std::exit(1)
+    }
+
+    println(`[+] Setting up...`)
+    let scene = Scene::new(image_width, image_height, max_time)
+    // build_scene_0(scene)
+    // build_scene_1(scene)
+    build_scene_2(scene)
+    // build_scene_prism(scene)
+
+    let paths = create_paths(scene, samples, progress: true)
+
+    println(`Got {paths.size} paths`)
+    let sz = paths.capacity * sizeof(Path)
+    for let i = 0; i < paths.size; ++i {
+        let path = &paths.data[i]
+        sz += path.segments.capacity * sizeof(Segment)
+    }
+    println(`Memory used for paths: {sz / 1024 / 1024} MB`)
+
+    println(`[+] Setting up normalization...`)
+    draw_rays(scene, paths, 0.01, time_window, progress: false)
+
+    println(`[+] Rendering last frame...`)
+    draw_rays(scene, paths, max_time, time_window, progress: false)
+    scene.img.save("last_frame.qoi")
+
     let done = 0
-    for let t = 0.0; t < 100.0; t += 0.1 {
-        let s = do_render(image_width, image_height, t, progress: false)
-        let img = s.img.to_image()
+    let total = (max_time / incr) as u32
+    for let t = 0.0; t < max_time; t += incr {
+        draw_rays(scene, paths, t, time_window, progress: false)
+
+        let img = scene.img.to_image()
         vr.send_frame(img)
         img.free()
-        s.free()
 
         if vr.type == FFMPEG {
-            println(`[+++] Done {done} frames`)
+            println(`[+] Done {done} / {total} frames`)
             done += 1
         }
     }
-    // let s = do_render(image_width, image_height)
-    // s.img.save("foo.qoi")
+    vr.finish()
+    if mode == FFMPEG {
+        println(`[+] Saved output to {output_file}`)
+    }
 }

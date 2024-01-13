@@ -1,4 +1,5 @@
 import @image::{ FColor }
+import std::vec::{ Vec2f }
 
 def f32::round(this): i32 extern("roundf")
 def f32::pow(this, v: f32): f32 extern("powf")
@@ -26,4 +27,22 @@ def hue_to_rgb(hue: f32): FColor {
         5 => FColor(C, Z, X),
         else => FColor(Z, Z, Z)
     }
+}
+
+def refract(vec: Vec2f, normal: Vec2f, rfidx: f32, out: &Vec2f): bool {
+    let r = 1.0 / rfidx
+    let nn = normal
+
+    if vec.dot(normal) > 0.0 {
+        r = rfidx
+        nn = normal.mults(-1.0)
+    }
+
+    let c = -vec.dot(nn)
+    let discr = 1.0 - r * r * (1.0 - c * c)
+
+    if discr < 0.0 return false
+
+    *out = vec.mults(r).add(nn.mults(r * c - discr.sqrt()))
+    return true
 }

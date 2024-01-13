@@ -1,5 +1,5 @@
 import @ray::{ Ray, HitRec }
-import @vec2::{ Vec2 }
+import std::vec::{ Vec2f }
 
 
 enum Material {
@@ -47,11 +47,11 @@ def Object::hit(&this, ray: &Ray, rec: &HitRec): bool {
 // ----- Circle -----
 
 struct Circle {
-    center: Vec2
+    center: Vec2f
     radius: f32
 }
 
-def Circle::new(center: Vec2, radius: f32, mat: Material, ior: f32 = 1.0): &Object {
+def Circle::new(center: Vec2f, radius: f32, mat: Material, ior: f32 = 1.0): &Object {
     let circ = std::new<Circle>()
     circ.center = center
     circ.radius = radius
@@ -87,11 +87,11 @@ def Circle::hit(&this, ray: &Ray, rec: &HitRec): bool {
 // ----- Line -----
 
 struct Line {
-    start: Vec2
-    end: Vec2
+    start: Vec2f
+    end: Vec2f
 }
 
-def Line::new(start: Vec2, end: Vec2, mat: Material, ior: f32 = 1.0): &Object {
+def Line::new(start: Vec2f, end: Vec2f, mat: Material, ior: f32 = 1.0): &Object {
     let line = std::new<Line>()
     line.start = start
     line.end = end
@@ -115,13 +115,9 @@ def Line::hit(&this, ray: &Ray, rec: &HitRec): bool {
 
     if 0.0 <= t <= 1.0 and s > 0.0001 and s < rec.t {
         rec.t = s
-        let n = Vec2(s1_y, -s1_x)
+        let n = Vec2f(s1_y, -s1_x)
         let ndotd = n.dot(ray.d)
-        if ndotd < 0.0 {
-            rec.n = n
-        } else {
-            rec.n = n.multf(-1.0)
-        }
+        rec.n = n
         rec.n = rec.n.normalized()
         return true
     }
@@ -132,11 +128,11 @@ def Line::hit(&this, ray: &Ray, rec: &HitRec): bool {
 // ----- Rect -----
 
 struct Rect {
-    min: Vec2
-    max: Vec2
+    min: Vec2f
+    max: Vec2f
 }
 
-def Rect::new(min: Vec2, max: Vec2, mat: Material, ior: f32 = 1.0): &Object {
+def Rect::new(min: Vec2f, max: Vec2f, mat: Material, ior: f32 = 1.0): &Object {
     let rect = std::new<Rect>()
     rect.min = min
     rect.max = max
@@ -145,10 +141,15 @@ def Rect::new(min: Vec2, max: Vec2, mat: Material, ior: f32 = 1.0): &Object {
 
 def Rect::hit(&this, ray: &Ray, rec: &HitRec): bool {
     let lines: [Line; 4]
-    lines[0] = Line(.min, Vec2(.max.x, .min.y))
-    lines[1] = Line(Vec2(.max.x, .min.y), .max)
-    lines[2] = Line(.max, Vec2(.min.x, .max.y))
-    lines[3] = Line(Vec2(.min.x, .max.y), .min)
+    // lines[0] = Line(.min, Vec2f(.max.x, .min.y))
+    // lines[1] = Line(Vec2f(.max.x, .min.y), .max)
+    // lines[2] = Line(.max, Vec2f(.min.x, .max.y))
+    // lines[3] = Line(Vec2f(.min.x, .max.y), .min)
+    /// swap the order of the lines above
+    lines[0] = Line(Vec2f(.min.x, .max.y), .min)
+    lines[1] = Line(.max, Vec2f(.min.x, .max.y))
+    lines[2] = Line(Vec2f(.max.x, .min.y), .max)
+    lines[3] = Line(.min, Vec2f(.max.x, .min.y))
 
     let hit = false
     for let l = 0; l < 4; l++ {

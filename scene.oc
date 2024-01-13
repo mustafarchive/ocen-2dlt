@@ -1,9 +1,10 @@
 import @objects::{ Object, Line, Circle, Rect, Material }
 import @image::{ FImage, FColor }
-import @vec2::{ Vec2 }
+
 import @ray::{ Ray, HitRec }
 import @light::{ Light }
 
+import std::vec::{ Vec2f }
 import std::vector::{ Vector }
 
 struct Scene {
@@ -21,6 +22,11 @@ struct Scene {
     img: &FImage
 }
 
+enum DrawMode {
+    Normal
+    AntiAlias
+}
+
 def Scene::free(&this) {
     this.img.free()
     for obj : .objects.iter() {
@@ -36,32 +42,40 @@ def Scene::draw_debug(&this) {
     }
 }
 
+def Scene::clear_image(&this) {
+    .img.clear()
+}
+
 def Scene::draw_debug_obj(&this, obj: &Object) {
     match obj.type {
         Line => {
             let ln = obj.data as &Line
-            .draw_line(&ln.start, &ln.end, FColor(0.0, 1.0, 0.0), debug: true)
+            .draw_line(ln.start, ln.end, FColor(1.0, 1.0, 1.0), Normal, replace: true)
         }
         Circle => {
             let c = obj.data as &Circle
-            .draw_circle(&c.center, c.radius, FColor(0.0, 1.0, 0.0))
+            .draw_circle(c.center, c.radius, FColor(1.0, 1.0, 1.0), Normal, replace: true)
         }
         Rect => {
+            // Don't draw the background rect
+            if obj == .objects.at(0) {
+                return
+            }
+
             let r = obj.data as &Rect
 
-            let offset = 0.001
+            let offset = 0.01
 
             let lines: [Line; 4]
-            lines[0] = Line(r.min, Vec2(r.max.x, r.min.y).subf(offset))
-            lines[1] = Line(Vec2(r.max.x, r.min.y), r.max.subf(offset))
-            lines[2] = Line(r.max, Vec2(r.min.x, r.max.y).subf(offset))
-            lines[3] = Line(Vec2(r.min.x, r.max.y), r.min.subf(offset))
+            lines[0] = Line(r.min, Vec2f(r.max.x, r.min.y).subs(offset))
+            lines[1] = Line(Vec2f(r.max.x, r.min.y), r.max.subs(offset))
+            lines[2] = Line(r.max, Vec2f(r.min.x, r.max.y).subs(offset))
+            lines[3] = Line(Vec2f(r.min.x, r.max.y), r.min.subs(offset))
 
             for let i = 0; i < 4; ++i {
-                .draw_line(&lines[i].start, &lines[i].end, FColor(0.0, 1.0, 0.0), debug: true)
+                .draw_line(lines[i].start, lines[i].end, FColor(1.0, 1.0, 1.0), AntiAlias, replace: true)
             }
         }
-        // else => assert false, "Unknown object type"
     }
 }
 
@@ -87,7 +101,7 @@ def Scene::new(width: u32, height: u32, max_time: f32 = -1.0): &Scene {
     scene.img = img
     scene.max_time = max_time
 
-    scene.objects.push(Rect::new(Vec2(-x_scale, -y_scale), Vec2(x_scale, y_scale), Diffuse))
+    scene.objects.push(Rect::new(Vec2f(-x_scale, -y_scale), Vec2f(x_scale, y_scale), Diffuse))
     return scene
 }
 
@@ -101,8 +115,7 @@ def Scene::hit(&this, ray: &Ray, rec: &HitRec): bool {
     return hit
 }
 
-def Scene::draw_circle(&this, p1: &Vec2, r: f32, color: FColor) {
-    let steps = 1000
+def Scene::draw_circle(&this, p1: Vec2f, r: f32, color: FColor, mode: DrawMode, replace: bool = false, steps: u32 = 1000) {
     for let angle = 0; angle < steps; angle += 1 {
         let a = (angle as f32 / steps as f32) * 2.0 * 3.1415
         let x1 = p1.x + r * a.cos()
@@ -111,46 +124,19 @@ def Scene::draw_circle(&this, p1: &Vec2, r: f32, color: FColor) {
         let x2 = (x1 + .x_scale) * (this.width as f32) / (2.0 * this.x_scale)
         let y2 = (y1 + .y_scale) * (this.height as f32) / (2.0 * this.y_scale)
 
-        let xi = x2.round()
-        let yi = y2.round()
-
-        if xi >= 0 and yi >= 0 {
-            let xu = x2 as u32
-            let yu = y2 as u32
-            if 0 <= xu < .width and 0 <= yu < .height {
-                this.img.set(xu, yu, color)
-            }
+        if mode == Normal {
+            .draw_pixel(x2, y2, color, replace)
+        } else {
+            .draw_pixel_aa(x2, y2, color, replace)
         }
     }
 }
 
-def Scene::set_pixel(&this, x: f32, y: f32, color: FColor) {
-    let xx = x.round()
-    let yy = y.round()
-
-    for let i = xx - 1; i <= xx + 1; i++ {
-        for let j = yy - 1; j <= yy + 1; j++ {
-            let W = (-(((x - i as f32) * (x - i as f32)) + ((y - j as f32) * (y - j as f32))) * 0.5).exp()
-
-            if 0i32 <= i < .width as i32 and 0i32 <= j < .height as i32 {
-                let oc = .img.get(i as u32, j as u32)
-                let nc = FColor(
-                    oc.r + color.r * W,
-                    oc.g + color.g * W,
-                    oc.b + color.b * W
-                )
-                .img.set(i as u32, j as u32, nc)
-            }
-        }
-    }
-}
-
-def Scene::draw_line(&this, p1: &Vec2, p2: &Vec2, color: FColor, debug: bool = false) {
+def Scene::draw_line(&this, p1: Vec2f, p2: Vec2f, color: FColor, mode: DrawMode, replace: bool = false) {
     let x1 = (p1.x + .x_scale) * (this.width as f32) / (2.0 * this.x_scale) 
     let y1 = (p1.y + .y_scale) * (this.height as f32) / (2.0 * this.y_scale)
     let x2 = (p2.x + .x_scale) * (this.width as f32) / (2.0 * this.x_scale)
     let y2 = (p2.y + .y_scale) * (this.height as f32) / (2.0 * this.y_scale)
-
 
     // line algorithm
     let dx = x2 - x1
@@ -169,19 +155,10 @@ def Scene::draw_line(&this, p1: &Vec2, p2: &Vec2, color: FColor, debug: bool = f
         let inc = (y2 - y1) / (x2 - x1)
 
         for let x = x1; x <= x2; x += 1.0 {
-            if debug {
-                let xi = x.round()
-                let yi = y.round()
-
-                if xi >= 0 and yi >= 0 {
-                    let xu = x as u32
-                    let yu = y as u32
-                    if 0 <= xu < .width and 0 <= yu < .height {
-                        .img.set(xu, yu, color)
-                    }
-                }
+            if mode == Normal {
+                .draw_pixel(x, y, color, replace)
             } else {
-                .set_pixel(x, y, color)
+                .draw_pixel_aa(x, y, color, replace)
             }
 
             y += inc
@@ -197,22 +174,55 @@ def Scene::draw_line(&this, p1: &Vec2, p2: &Vec2, color: FColor, debug: bool = f
         let inc = (x2 - x1) / (y2 - y1)
 
         for let y = y1; y <= y2; y += 1.0 {
-            if debug {
-                let xi = x.round()
-                let yi = y.round()
-
-                if xi >= 0 and yi >= 0 {
-                    let xu = x as u32
-                    let yu = y as u32
-                    if 0 <= xu < .width and 0 <= yu < .height {
-                        .img.set(xu, yu, color)
-                    }
-                }
+            if mode == Normal {
+                .draw_pixel(x, y, color, replace)
             } else {
-                .set_pixel(x, y, color)
+                .draw_pixel_aa(x, y, color, replace)
             }
 
             x += inc
         }
+    }
+}
+
+def Scene::draw_pixel_aa(&this, x: f32, y: f32, color: FColor, replace: bool) {
+    let xx = x.round()
+    let yy = y.round()
+
+    for let i = xx - 1; i <= xx + 1; i++ {
+        for let j = yy - 1; j <= yy + 1; j++ {
+            let W = (-(((x - i as f32) * (x - i as f32)) + ((y - j as f32) * (y - j as f32))) * 0.5).exp()
+
+            if 0i32 <= i < .width as i32 and 0i32 <= j < .height as i32 {
+                let col = color
+                if not replace {
+                    let oc = .img.get(i as u32, j as u32)
+                    col = FColor(
+                        col.r + oc.r * W,
+                        col.g + oc.g * W,
+                        col.b + oc.b * W
+                    )
+                }
+                .img.set(i as u32, j as u32, col)
+            }
+        }
+    }
+}
+
+def Scene::draw_pixel(&this, x: f32, y: f32, color: FColor, replace: bool) {
+    let i = x.round()
+    let j = y.round()
+
+    if (0i32 <= i < .width as i32 and 0i32 <= j < .height as i32) {
+        let col = color
+        if not replace {
+            let oc = .img.get(i as u32, j as u32)
+            col = FColor(
+                col.r + oc.r,
+                col.g + oc.g,
+                col.b + oc.b
+            )
+        }
+        .img.set(i as u32, j as u32, col)
     }
 }
