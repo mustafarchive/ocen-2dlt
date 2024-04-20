@@ -1,5 +1,6 @@
 import @ray::{ Ray, HitRec }
 import std::vec::{ Vec2f }
+import std::mem
 
 
 enum Material {
@@ -24,7 +25,7 @@ struct Object {
 }
 
 def Object::new(type: ObjectType, data: untyped_ptr, mat: Material, ior: f32 = 1.0): &Object {
-    let obj = std::new<Object>()
+    let obj = mem::alloc<Object>()
     obj.type = type
     obj.data = data
     obj.mat = mat
@@ -52,7 +53,7 @@ struct Circle {
 }
 
 def Circle::new(center: Vec2f, radius: f32, mat: Material, ior: f32 = 1.0): &Object {
-    let circ = std::new<Circle>()
+    let circ = mem::alloc<Circle>()
     circ.center = center
     circ.radius = radius
     return Object::new(Circle, circ, mat, ior)
@@ -92,7 +93,7 @@ struct Line {
 }
 
 def Line::new(start: Vec2f, end: Vec2f, mat: Material, ior: f32 = 1.0): &Object {
-    let line = std::new<Line>()
+    let line = mem::alloc<Line>()
     line.start = start
     line.end = end
     return Object::new(Line, line, mat, ior)
@@ -133,7 +134,7 @@ struct Rect {
 }
 
 def Rect::new(min: Vec2f, max: Vec2f, mat: Material, ior: f32 = 1.0): &Object {
-    let rect = std::new<Rect>()
+    let rect = mem::alloc<Rect>()
     rect.min = min
     rect.max = max
     return Object::new(Rect, rect, mat, ior)
